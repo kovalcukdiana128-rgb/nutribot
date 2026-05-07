@@ -1,5 +1,6 @@
 import os
 import requests
+import sqlite3
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -28,65 +29,37 @@ FOOD_DB = {
 
 
 # 🔎 Пошук через Open Food Facts
-def get_food_api(product):
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0"
-        }
-
-        url = f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={product}&search_simple=1&action=process&json=1"
-
-        response = requests.get(url, headers=headers, timeout=10)
-
-        if response.status_code != 200:
-            return None
-
-        data = response.json()
-        products = data.get("products", [])
-
-        if not products:
-            return None
-
-        item = products[0]
-        nutriments = item.get("nutriments", {})
-
-        return f"""
-🍽 {item.get('product_name', 'Unknown')}
-
-🔥 Калорії: {nutriments.get('energy-kcal_100g', 0)} ккал / 100г
-🥩 Білки: {nutriments.get('proteins_100g', 0)} г
-🧈 Жири: {nutriments.get('fat_100g', 0)} г
-🍞 Вуглеводи: {nutriments.get('carbohydrates_100g', 0)} г
-"""
-
-    except:
-        return None
-
-
-# 🧠 Головна функція
 def get_food_info(product):
-    product = product.lower()
+    conn = sqlite3.connect("foods.db")
+    cursor = conn.cursor()
 
-    # 🔥 Спочатку шукаємо у своїй базі
-    if product in FOOD_DB:
-        food = FOOD_DB[product]
+    cursor.execute(
+        "SELECT * FROM foods WHERE name LIKE ?",
+        (f"%{product.lower()}%",)
+    )
 
+    food = cursor.fetchone()
+
+    conn.close()
+
+    # якщо знайшли у SQLite
+    if food:
         return f"""
-🍽 {product.title()}
+🍽 {food[1].title()}
 
-🔥 Калорії: {food['kcal']} ккал / 100г
-🥩 Білки: {food['protein']} г
-🧈 Жири: {food['fat']} г
-🍞 Вуглеводи: {food['carbs']} г
+🔥 Калорії: {food[2]} ккал / 100г
+🥩 Білки: {food[3]} г
+🧈 Жири: {food[4]} г
+🍞 Вуглеводи: {food[5]} г
 """
 
-    # 🌍 Якщо нема — шукаємо через API
+    # fallback на API
     api_result = get_food_api(product)
 
     if api_result:
         return api_result
 
-    return "❌ Не знайшла продукт. Спробуй іншу назву."
+    return "❌ Не знайшла продукт."
 
 
 # 👋 Команда /start
@@ -104,12 +77,45 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(result)
 
+async def add_food(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        args = context.args
 
+        if len(args) != 5:
+            await update.message.reply_text(
+                "❌ Формат:\n/addfood назва ккал білки жири вуглеводи"
+            )
+            return
+
+        name = args[0].lower()
+        kcal = float(args[1])
+        protein = float(args[2])
+        fat = float(args[3])
+        carbs = float(args[4])
+
+        conn = sqlite3.connect("foods.db")
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO foods (name, kcal, protein, fat, carbs)
+            VALUES (?, ?, ?, ?, ?)
+        """, (name, kcal, protein, fat, carbs))
+
+        conn.commit()
+        conn.close()
+
+        await update.message.reply_text(
+            f"✅ Додано: {name}"
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Помилка: {e}")
 # 🚀 Запуск бота
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+
 
 print("✅ Бот запущений...")
 
