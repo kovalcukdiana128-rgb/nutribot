@@ -11,7 +11,6 @@ from telegram.ext import (
     filters,
 )
 
-# 🔑 TOKEN
 TOKEN = os.getenv("TOKEN")
 
 
@@ -38,29 +37,7 @@ def init_db():
 
 
 # =========================
-# 🌍 OPEN FOOD FACTS (по назві)
-# =========================
-def get_food_by_name(name):
-    url = f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={name}&search_simple=1&action=process&json=1"
-    r = requests.get(url).json()
-
-    if not r.get("products"):
-        return None
-
-    p = r["products"][0]
-    n = p.get("nutriments", {})
-
-    return {
-        "name": p.get("product_name", name),
-        "kcal": n.get("energy-kcal_100g", 0),
-        "protein": n.get("proteins_100g", 0),
-        "fat": n.get("fat_100g", 0),
-        "carbs": n.get("carbohydrates_100g", 0),
-    }
-
-
-# =========================
-# 🔢 OPEN FOOD FACTS (по штрихкоду)
+# 🌍 OPEN FOOD FACTS
 # =========================
 def get_food_by_barcode(barcode):
     url = f"https://world.openfoodfacts.org/api/v0/product/{barcode}.json"
@@ -82,52 +59,29 @@ def get_food_by_barcode(barcode):
 
 
 # =========================
-# 🧠 DB SEARCH
+# 📸 REAL BARCODE FROM IMAGE
 # =========================
-def get_from_db(name):
-    conn = sqlite3.connect("foods.db")
-    cursor = conn.cursor()
+async def decode_barcode(image_bytes):
+    """
+    🔥 Реальне розпізнавання через хмарний API
+    """
 
-    cursor.execute(
-        "SELECT * FROM foods WHERE name LIKE ?",
-        (f"%{name.lower()}%",)
-    )
+    try:
+        url = "https://api.zxing.org/decode"
 
-    row = cursor.fetchone()
-    conn.close()
+        files = {"file": ("image.jpg", image_bytes)}
 
-    if row:
-        return {
-            "name": row[1],
-            "kcal": row[2],
-            "protein": row[3],
-            "fat": row[4],
-            "carbs": row[5],
-        }
+        response = requests.post(url, files=files, timeout=20)
 
-    return None
+        data = response.json()
 
+        if not data.get("success"):
+            return None
 
-# =========================
-# 💾 SAVE
-# =========================
-def save_to_db(food):
-    conn = sqlite3.connect("foods.db")
-    cursor = conn.cursor()
+        return data["data"][0]["rawValue"]
 
-    cursor.execute("""
-        INSERT OR REPLACE INTO foods (name, kcal, protein, fat, carbs)
-        VALUES (?, ?, ?, ?, ?)
-    """, (
-        food["name"].lower(),
-        food["kcal"],
-        food["protein"],
-        food["fat"],
-        food["carbs"],
-    ))
-
-    conn.commit()
-    conn.close()
+    except:
+        return None
 
 
 # =========================
@@ -145,51 +99,32 @@ def format_food(food):
 
 
 # =========================
-# 🔍 MAIN SEARCH
-# =========================
-def get_food(name):
-    food = get_from_db(name)
-    if food:
-        return food
-
-    food = get_food_by_name(name)
-    if food:
-        save_to_db(food)
-        return food
-
-    return None
-
-
-# =========================
-# /START
-# =========================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🥗 Привіт!\n\n"
-        "📸 Надішли фото або напиши продукт"
-    )
-
-
-# =========================
-# 📸 PHOTO (штрихкод через API)
+# 📸 PHOTO HANDLER
 # =========================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📸 Аналізую штрихкод...")
+    await update.message.reply_text("📸 Сканую штрихкод...")
 
-    # ⚠️ Поки що Telegram не дає barcode напряму
-    # 👉 тому тут потрібне майбутнє API (Google Vision / ZXing server)
-    # зараз симуляція:
+    photo = update.message.photo[-1]
+    file = await photo.get_file()
+    image = await file.download_as_bytearray()
 
-    fake_barcode = "737628064502"  # приклад
+    barcode = await decode_barcode(image)
 
-    food = get_food_by_barcode(fake_barcode)
+    if not barcode:
+        await update.message.reply_text(
+            "❌ Не вдалося розпізнати штрихкод\n"
+            "👉 Спробуй ще раз або введи назву вручну"
+        )
+        return
+
+    food = get_food_by_barcode(barcode)
 
     if food:
         await update.message.reply_text(format_food(food))
     else:
         await update.message.reply_text(
-            "❌ Продукт не знайдено\n"
-            "👉 Напиши вручну:\n"
+            f"❌ Продукт не знайдено (barcode: {barcode})\n"
+            "👉 Хочеш додати в базу? Напиши:\n"
             "назва ккал білки жири вуглеводи"
         )
 
@@ -200,32 +135,39 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower().split()
 
-    # ➕ ДОДАВАННЯ
     if len(text) == 5:
         name, kcal, protein, fat, carbs = text
 
-        save_to_db({
-            "name": name,
-            "kcal": kcal,
-            "protein": protein,
-            "fat": fat,
-            "carbs": carbs
-        })
+        conn = sqlite3.connect("foods.db")
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO foods (name, kcal, protein, fat, carbs)
+            VALUES (?, ?, ?, ?, ?)
+        """, (name, kcal, protein, fat, carbs))
+
+        conn.commit()
+        conn.close()
 
         await update.message.reply_text("✅ Додано в базу")
         return
 
-    # 🔎 ПОШУК
-    food = get_food(text[0])
-
-    if food:
-        await update.message.reply_text(format_food(food))
-    else:
-        await update.message.reply_text("❌ Не знайдено продукт")
+    await update.message.reply_text("📸 Надішли фото штрихкоду або введи продукт")
 
 
 # =========================
-# 🚀 RUN
+# 🚀 START
+# =========================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🥗 Бот КБЖВ готовий\n\n"
+        "📸 Надішли фото штрихкоду\n"
+        "✍️ або напиши продукт"
+    )
+
+
+# =========================
+# RUN
 # =========================
 def main():
     init_db()
