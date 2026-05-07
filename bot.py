@@ -119,4 +119,8 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
 print("✅ Бот запущений...")
 
-app.run_polling()
+app.run_polling(
+    poll_interval=3,
+    timeout=30,
+    drop_pending_updates=True
+)
