@@ -1,6 +1,7 @@
 import os
 import requests
 import sqlite3
+
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -10,83 +11,173 @@ from telegram.ext import (
     filters,
 )
 
-# 🔑 Токен з Render / Environment Variables
+# 🔑 TOKEN
 TOKEN = os.getenv("TOKEN")
 
 
-# 📊 Наша база продуктів
-FOOD_DB = {
-    "банан": {"kcal": 89, "protein": 1.1, "fat": 0.3, "carbs": 23},
-    "яблуко": {"kcal": 52, "protein": 0.3, "fat": 0.2, "carbs": 14},
-    "рис": {"kcal": 130, "protein": 2.7, "fat": 0.3, "carbs": 28},
-    "гречка": {"kcal": 110, "protein": 4.5, "fat": 1.6, "carbs": 21},
-    "курка": {"kcal": 165, "protein": 31, "fat": 3.6, "carbs": 0},
-    "яйце": {"kcal": 155, "protein": 13, "fat": 11, "carbs": 1.1},
-    "молоко": {"kcal": 42, "protein": 3.4, "fat": 1, "carbs": 5},
-    "хліб": {"kcal": 265, "protein": 9, "fat": 3.2, "carbs": 49},
-    "сир": {"kcal": 402, "protein": 25, "fat": 33, "carbs": 1.3},
-}
+# =========================
+# 🗄 DATABASE
+# =========================
+def init_db():
+    conn = sqlite3.connect("foods.db")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS foods (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE,
+            kcal REAL,
+            protein REAL,
+            fat REAL,
+            carbs REAL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
 
 
-# 🔎 Пошук через Open Food Facts
-# 🔎 Пошук продукту
-def get_food_info(product):
+# =========================
+# 🌍 OPEN FOOD FACTS
+# =========================
+def get_from_api(query):
+    url = f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={query}&search_simple=1&action=process&json=1"
+    r = requests.get(url).json()
+
+    if not r.get("products"):
+        return None
+
+    p = r["products"][0]
+    n = p.get("nutriments", {})
+
+    return {
+        "name": p.get("product_name", query),
+        "kcal": n.get("energy-kcal_100g", 0),
+        "protein": n.get("proteins_100g", 0),
+        "fat": n.get("fat_100g", 0),
+        "carbs": n.get("carbohydrates_100g", 0),
+    }
+
+
+# =========================
+# 🧠 DB SEARCH
+# =========================
+def get_from_db(name):
     conn = sqlite3.connect("foods.db")
     cursor = conn.cursor()
 
     cursor.execute(
         "SELECT * FROM foods WHERE name LIKE ?",
-        (f"%{product.lower()}%",)
+        (f"%{name.lower()}%",)
     )
 
-    food = cursor.fetchone()
-
+    row = cursor.fetchone()
     conn.close()
 
-    # якщо знайшли у SQLite
-    if food:
-        return f"""
-🍽 {food[1].title()}
+    if row:
+        return {
+            "name": row[1],
+            "kcal": row[2],
+            "protein": row[3],
+            "fat": row[4],
+            "carbs": row[5],
+        }
 
-🔥 Калорії: {food[2]} ккал / 100г
-🥩 Білки: {food[3]} г
-🧈 Жири: {food[4]} г
-🍞 Вуглеводи: {food[5]} г
+    return None
+
+
+# =========================
+# 🍽 MAIN SEARCH
+# =========================
+def get_food(name):
+    food = get_from_db(name)
+    if food:
+        return food
+
+    food = get_from_api(name)
+    if food:
+        save_to_db(food)
+        return food
+
+    return None
+
+
+# =========================
+# 💾 SAVE TO DB
+# =========================
+def save_to_db(food):
+    conn = sqlite3.connect("foods.db")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT OR REPLACE INTO foods (name, kcal, protein, fat, carbs)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        food["name"].lower(),
+        food["kcal"],
+        food["protein"],
+        food["fat"],
+        food["carbs"],
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+# =========================
+# 📦 FORMAT
+# =========================
+def format_food(food):
+    return f"""
+🍽 {food['name']}
+
+🔥 Калорії: {food['kcal']}
+🥩 Білки: {food['protein']}
+🧈 Жири: {food['fat']}
+🍞 Вуглеводи: {food['carbs']}
 """
 
-    return "❌ Не знайшла продукт."
 
-
-# 👋 Команда /start
+# =========================
+# /START
+# =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🥗 Привіт! Я бот для підрахунку калорій.\n\nНапиши продукт 🍎"
+        "🥗 Привіт!\n\n"
+        "📸 Надішли фото або напиши продукт"
     )
 
 
-# 💬 Обробка повідомлень
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+# =========================
+# 📸 PHOTO (штрихкод поки заглушка)
+# =========================
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📸 Фото отримано\n🔎 Шукаю продукт...")
 
-    result = get_food_info(text)
+    # 👉 поки що заглушка (далі підключимо реальний barcode API)
+    fake_barcode = "banana"
 
-    await update.message.reply_text(result)
+    food = get_food(fake_barcode)
 
-async def add_food(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        args = context.args
+    if food:
+        await update.message.reply_text(format_food(food))
+    else:
+        await update.message.reply_text(
+            "❌ Продукт не знайдено\n"
+            "👉 Введи вручну:\n"
+            "назва ккал білки жири вуглеводи"
+        )
 
-        if len(args) != 5:
-            await update.message.reply_text(
-                "❌ Формат:\n/addfood назва ккал білки жири вуглеводи"
-            )
-            return
 
-        name = args[0].lower()
-        kcal = float(args[1])
-        protein = float(args[2])
-        fat = float(args[3])
-        carbs = float(args[4])
+# =========================
+# 💬 TEXT HANDLER
+# =========================
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.lower().split()
+
+    # 👉 ДОДАВАННЯ ПРОДУКТУ
+    if len(text) == 5:
+        name, kcal, protein, fat, carbs = text
 
         conn = sqlite3.connect("foods.db")
         cursor = conn.cursor()
@@ -99,24 +190,33 @@ async def add_food(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
 
-        await update.message.reply_text(
-            f"✅ Додано: {name}"
-        )
+        await update.message.reply_text("✅ Продукт додано в базу")
+        return
 
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ Помилка: {e}")
-# 🚀 Запуск бота
-app = ApplicationBuilder().token(TOKEN).build()
+    # 👉 ПОШУК
+    food = get_food(text[0])
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("addfood", add_food))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+    if food:
+        await update.message.reply_text(format_food(food))
+    else:
+        await update.message.reply_text("❌ Не знайдено продукт")
 
 
-print("✅ Бот запущений...")
+# =========================
+# 🚀 RUN
+# =========================
+def main():
+    init_db()
 
-app.run_polling(
-    poll_interval=3,
-    timeout=30,
-    drop_pending_updates=True
-)
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    print("🚀 Bot running...")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
