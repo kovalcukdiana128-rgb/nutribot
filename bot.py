@@ -38,10 +38,10 @@ def init_db():
 
 
 # =========================
-# 🌍 OPEN FOOD FACTS
+# 🌍 OPEN FOOD FACTS (по назві)
 # =========================
-def get_from_api(query):
-    url = f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={query}&search_simple=1&action=process&json=1"
+def get_food_by_name(name):
+    url = f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={name}&search_simple=1&action=process&json=1"
     r = requests.get(url).json()
 
     if not r.get("products"):
@@ -51,7 +51,29 @@ def get_from_api(query):
     n = p.get("nutriments", {})
 
     return {
-        "name": p.get("product_name", query),
+        "name": p.get("product_name", name),
+        "kcal": n.get("energy-kcal_100g", 0),
+        "protein": n.get("proteins_100g", 0),
+        "fat": n.get("fat_100g", 0),
+        "carbs": n.get("carbohydrates_100g", 0),
+    }
+
+
+# =========================
+# 🔢 OPEN FOOD FACTS (по штрихкоду)
+# =========================
+def get_food_by_barcode(barcode):
+    url = f"https://world.openfoodfacts.org/api/v0/product/{barcode}.json"
+    r = requests.get(url).json()
+
+    if r.get("status") != 1:
+        return None
+
+    p = r["product"]
+    n = p.get("nutriments", {})
+
+    return {
+        "name": p.get("product_name", "unknown"),
         "kcal": n.get("energy-kcal_100g", 0),
         "protein": n.get("proteins_100g", 0),
         "fat": n.get("fat_100g", 0),
@@ -87,23 +109,7 @@ def get_from_db(name):
 
 
 # =========================
-# 🍽 MAIN SEARCH
-# =========================
-def get_food(name):
-    food = get_from_db(name)
-    if food:
-        return food
-
-    food = get_from_api(name)
-    if food:
-        save_to_db(food)
-        return food
-
-    return None
-
-
-# =========================
-# 💾 SAVE TO DB
+# 💾 SAVE
 # =========================
 def save_to_db(food):
     conn = sqlite3.connect("foods.db")
@@ -125,7 +131,7 @@ def save_to_db(food):
 
 
 # =========================
-# 📦 FORMAT
+# 🍽 FORMAT
 # =========================
 def format_food(food):
     return f"""
@@ -139,6 +145,22 @@ def format_food(food):
 
 
 # =========================
+# 🔍 MAIN SEARCH
+# =========================
+def get_food(name):
+    food = get_from_db(name)
+    if food:
+        return food
+
+    food = get_food_by_name(name)
+    if food:
+        save_to_db(food)
+        return food
+
+    return None
+
+
+# =========================
 # /START
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -149,22 +171,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# 📸 PHOTO (штрихкод поки заглушка)
+# 📸 PHOTO (штрихкод через API)
 # =========================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📸 Фото отримано\n🔎 Шукаю продукт...")
+    await update.message.reply_text("📸 Аналізую штрихкод...")
 
-    # 👉 поки що заглушка (далі підключимо реальний barcode API)
-    fake_barcode = "banana"
+    # ⚠️ Поки що Telegram не дає barcode напряму
+    # 👉 тому тут потрібне майбутнє API (Google Vision / ZXing server)
+    # зараз симуляція:
 
-    food = get_food(fake_barcode)
+    fake_barcode = "737628064502"  # приклад
+
+    food = get_food_by_barcode(fake_barcode)
 
     if food:
         await update.message.reply_text(format_food(food))
     else:
         await update.message.reply_text(
             "❌ Продукт не знайдено\n"
-            "👉 Введи вручну:\n"
+            "👉 Напиши вручну:\n"
             "назва ккал білки жири вуглеводи"
         )
 
@@ -175,25 +200,22 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower().split()
 
-    # 👉 ДОДАВАННЯ ПРОДУКТУ
+    # ➕ ДОДАВАННЯ
     if len(text) == 5:
         name, kcal, protein, fat, carbs = text
 
-        conn = sqlite3.connect("foods.db")
-        cursor = conn.cursor()
+        save_to_db({
+            "name": name,
+            "kcal": kcal,
+            "protein": protein,
+            "fat": fat,
+            "carbs": carbs
+        })
 
-        cursor.execute("""
-            INSERT OR REPLACE INTO foods (name, kcal, protein, fat, carbs)
-            VALUES (?, ?, ?, ?, ?)
-        """, (name, kcal, protein, fat, carbs))
-
-        conn.commit()
-        conn.close()
-
-        await update.message.reply_text("✅ Продукт додано в базу")
+        await update.message.reply_text("✅ Додано в базу")
         return
 
-    # 👉 ПОШУК
+    # 🔎 ПОШУК
     food = get_food(text[0])
 
     if food:
