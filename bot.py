@@ -1,6 +1,7 @@
 import os
-import requests
+import json
 import sqlite3
+import requests
 
 from telegram import Update
 from telegram.ext import (
@@ -11,11 +12,22 @@ from telegram.ext import (
     filters,
 )
 
-TOKEN = os.getenv("TOKEN")
+from google.cloud import vision
+from google.oauth2 import service_account
 
 
 # =========================
-# 🗄 DATABASE
+# 🔑 ENV
+# =========================
+TOKEN = os.getenv("TOKEN")
+
+google_creds = json.loads(os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON"))
+credentials = service_account.Credentials.from_service_account_info(google_creds)
+client = vision.ImageAnnotatorClient(credentials=credentials)
+
+
+# =========================
+# 🗄 DB
 # =========================
 def init_db():
     conn = sqlite3.connect("foods.db")
@@ -34,6 +46,29 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+
+# =========================
+# 🍽 LOCAL DB SEARCH
+# =========================
+def get_from_db(name):
+    conn = sqlite3.connect("foods.db")
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM foods WHERE name LIKE ?", (f"%{name.lower()}%",))
+    food = cursor.fetchone()
+
+    conn.close()
+
+    if food:
+        return {
+            "name": food[1],
+            "kcal": food[2],
+            "protein": food[3],
+            "fat": food[4],
+            "carbs": food[5],
+        }
+    return None
 
 
 # =========================
@@ -59,29 +94,26 @@ def get_food_by_barcode(barcode):
 
 
 # =========================
-# 📸 REAL BARCODE FROM IMAGE
+# 📸 GOOGLE VISION BARCODE
 # =========================
-async def decode_barcode(image_bytes):
-    """
-    🔥 Реальне розпізнавання через хмарний API
-    """
+def decode_barcode_google(image_bytes):
+    image = vision.Image(content=image_bytes)
 
-    try:
-        url = "https://api.zxing.org/decode"
+    response = client.text_detection(image=image)
 
-        files = {"file": ("image.jpg", image_bytes)}
+    texts = response.text_annotations
 
-        response = requests.post(url, files=files, timeout=20)
-
-        data = response.json()
-
-        if not data.get("success"):
-            return None
-
-        return data["data"][0]["rawValue"]
-
-    except:
+    if not texts:
         return None
+
+    raw = texts[0].description
+
+    barcode = "".join(filter(str.isdigit, raw))
+
+    if len(barcode) < 8:
+        return None
+
+    return barcode
 
 
 # =========================
@@ -99,22 +131,30 @@ def format_food(food):
 
 
 # =========================
+# 👋 START
+# =========================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🥗 Бот КБЖВ запущений\n\n"
+        "📸 Надішли фото штрихкоду\n"
+        "✍️ або напиши продукт"
+    )
+
+
+# =========================
 # 📸 PHOTO HANDLER
 # =========================
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📸 Сканую штрихкод...")
+    await update.message.reply_text("📸 Розпізнаю штрихкод...")
 
     photo = update.message.photo[-1]
     file = await photo.get_file()
     image = await file.download_as_bytearray()
 
-    barcode = await decode_barcode(image)
+    barcode = decode_barcode_google(image)
 
     if not barcode:
-        await update.message.reply_text(
-            "❌ Не вдалося розпізнати штрихкод\n"
-            "👉 Спробуй ще раз або введи назву вручну"
-        )
+        await update.message.reply_text("❌ Не вдалося розпізнати штрихкод")
         return
 
     food = get_food_by_barcode(barcode)
@@ -123,8 +163,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(format_food(food))
     else:
         await update.message.reply_text(
-            f"❌ Продукт не знайдено (barcode: {barcode})\n"
-            "👉 Хочеш додати в базу? Напиши:\n"
+            f"❌ Не знайдено продукт (barcode: {barcode})\n"
+            "👉 Додай вручну:\n"
             "назва ккал білки жири вуглеводи"
         )
 
@@ -135,6 +175,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower().split()
 
+    # ➕ ADD FOOD
     if len(text) == 5:
         name, kcal, protein, fat, carbs = text
 
@@ -152,22 +193,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Додано в базу")
         return
 
-    await update.message.reply_text("📸 Надішли фото штрихкоду або введи продукт")
+    # 🔎 SEARCH
+    food = get_from_db(text[0])
+
+    if food:
+        await update.message.reply_text(format_food(food))
+    else:
+        await update.message.reply_text("❌ Не знайдено. Спробуй фото або додай вручну")
 
 
 # =========================
-# 🚀 START
-# =========================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🥗 Бот КБЖВ готовий\n\n"
-        "📸 Надішли фото штрихкоду\n"
-        "✍️ або напиши продукт"
-    )
-
-
-# =========================
-# RUN
+# 🚀 RUN
 # =========================
 def main():
     init_db()
