@@ -42,9 +42,9 @@ def get_food_info(product):
 
     conn.close()
 
-    # якщо знайшли у SQLite
-    if food:
-        return f"""
+   # якщо знайшли у SQLite
+if food:
+    return f"""
 🍽 {food[1].title()}
 
 🔥 Калорії: {food[2]} ккал / 100г
@@ -53,13 +53,7 @@ def get_food_info(product):
 🍞 Вуглеводи: {food[5]} г
 """
 
-    # fallback на API
-    api_result = get_food_api(product)
-
-    if api_result:
-        return api_result
-
-    return "❌ Не знайшла продукт."
+return "❌ Не знайшла продукт."
 
 
 # 👋 Команда /start
@@ -114,6 +108,7 @@ async def add_food(update: Update, context: ContextTypes.DEFAULT_TYPE):
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("addfood", add_food))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
 
