@@ -29,6 +29,7 @@ FOOD_DB = {
 
 
 # 🔎 Пошук через Open Food Facts
+# 🔎 Пошук продукту
 def get_food_info(product):
     conn = sqlite3.connect("foods.db")
     cursor = conn.cursor()
@@ -42,9 +43,9 @@ def get_food_info(product):
 
     conn.close()
 
-   # якщо знайшли у SQLite
-if food:
-    return f"""
+    # якщо знайшли у SQLite
+    if food:
+        return f"""
 🍽 {food[1].title()}
 
 🔥 Калорії: {food[2]} ккал / 100г
@@ -53,7 +54,7 @@ if food:
 🍞 Вуглеводи: {food[5]} г
 """
 
-return "❌ Не знайшла продукт."
+    return "❌ Не знайшла продукт."
 
 
 # 👋 Команда /start
