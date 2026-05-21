@@ -19,7 +19,7 @@ from google.oauth2 import service_account
 # =========================
 # 🔑 ENV
 # =========================
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("8635120471:AAH-jXEj5Lw6pVpH6mxc-7nIfu0h9fhx8p4")
 
 from google.cloud import vision
 from google.oauth2 import service_account
